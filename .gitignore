@@ -1,0 +1,75 @@
+# API Keys and Secrets
+.env
+.env.local
+.env.*.local
+config.json
+voice_notes_mcp/.env
+android_app/local.properties
+
+# MCP Configuration (contains API keys)
+claude_desktop_config.json
+claude_settings.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Android
+android_app/*.iml
+android_app/.gradle
+android_app/local.properties
+android_app/.idea/
+android_app/.DS_Store
+android_app/build/
+android_app/captures/
+android_app/.externalNativeBuild
+android_app/.cxx
+android_app/*.ap_
+android_app/*.aab
+android_app/*.apk
+android_app/output.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
