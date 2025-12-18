@@ -6,6 +6,29 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
+/**
+ * OpenAIClient - Whisper API integration for speech-to-text
+ *
+ * Handles transcription of audio recordings using OpenAI's Whisper API.
+ * Sends audio files via multipart/form-data POST request and extracts
+ * the transcribed text from the JSON response.
+ *
+ * Features:
+ * - Async transcription using Kotlin coroutines
+ * - Automatic multipart form encoding
+ * - Simple JSON response parsing
+ * - Fallback to mock transcription if API key not configured
+ *
+ * Configuration:
+ * - Requires OPENAI_API_KEY in android_app/local.properties
+ * - Uses whisper-1 model for transcription
+ *
+ * Usage:
+ *   val transcript = OpenAIClient.transcribeAudio(audioFile)
+ *   // transcript contains the text transcription
+ *
+ * @see BuildConfig.OPENAI_API_KEY The API key injected at build time
+ */
 object OpenAIClient {
     private const val WHISPER_API_URL = "https://api.openai.com/v1/audio/transcriptions"
     

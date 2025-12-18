@@ -1,5 +1,58 @@
 package com.voicenotes.mcp
 
+/**
+ * Voice Notes MCP - Android Application
+ *
+ * A voice recording and transcription app with project organization.
+ * Records audio, transcribes with OpenAI Whisper, stores in Supabase,
+ * and syncs with Claude Desktop via MCP server.
+ *
+ * Main Features (v1.1):
+ * - Record voice notes with one-tap interface
+ * - Automatic AI transcription (OpenAI Whisper)
+ * - Edit transcripts inline
+ * - Organize notes into projects
+ * - Inbox workflow for unprocessed notes
+ * - Project management (create, edit, archive)
+ * - Real-time cloud sync with Supabase
+ *
+ * UI Structure:
+ * - 3 tabs: Inbox, Projects, Settings
+ * - Black & white minimalist Material 3 design
+ * - Loading states for all async operations
+ * - Inline project creation from inbox
+ *
+ * Architecture:
+ * - Jetpack Compose for UI (declarative, reactive)
+ * - Kotlin Coroutines for async operations
+ * - State hoisting pattern for data flow
+ * - MVVM-like structure (state in MainActivity)
+ *
+ * Components:
+ * - MainActivity: Main entry point and state management (~1100 lines)
+ * - Screen composables: InboxScreen, ProjectsScreen, SettingsScreen
+ * - Dialog composables: ProjectPickerDialog, CreateProjectDialog
+ * - Card composables: NoteCard, ProjectCard for list items
+ *
+ * Data Flow:
+ * 1. User records audio → AudioRecorder
+ * 2. Audio sent to Whisper API → OpenAIClient
+ * 3. Transcript saved to Supabase → SupabaseClient
+ * 4. UI refreshes with new note → State update
+ * 5. User assigns to project → Updates project_id
+ *
+ * Recent UX Improvements (2024):
+ * - Projects load automatically in assign dialog
+ * - Loading indicator when opening project
+ * - Inline project creation (no separate dialog)
+ * - Scrollable project list for many projects
+ *
+ * @see SupabaseClient for database operations
+ * @see OpenAIClient for transcription
+ * @see AudioRecorder for audio recording
+ * @see Note and Project data models
+ */
+
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -80,6 +133,7 @@ fun VoiceNotesApp() {
     var isEditing by remember { mutableStateOf(false) }
     var editingNoteId by remember { mutableStateOf<String?>(null) }
     var currentTranscript by remember { mutableStateOf("") }
+    var isLoadingProjectNotes by remember { mutableStateOf(false) }
 
     val audioRecorder = remember { AudioRecorder(context) }
 
@@ -103,11 +157,27 @@ fun VoiceNotesApp() {
                 } else if (currentScreen == Screen.PROJECTS) {
                     projects = SupabaseClient.getProjects()
                     if (selectedProject != null) {
+                        isLoadingProjectNotes = true
                         projectNotes = SupabaseClient.getProjectNotes(selectedProject!!.id)
+                        isLoadingProjectNotes = false
                     }
                 }
             } catch (e: Exception) {
-                // Handle error
+                e.printStackTrace()
+                isLoadingProjectNotes = false
+            }
+        }
+    }
+
+    // Load projects when assign dialog opens
+    LaunchedEffect(showProjectPicker) {
+        if (showProjectPicker != null && projects.isEmpty()) {
+            scope.launch {
+                try {
+                    projects = SupabaseClient.getProjects()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
         }
     }
@@ -158,6 +228,7 @@ fun VoiceNotesApp() {
                     ProjectDetailScreen(
                         project = selectedProject!!,
                         notes = projectNotes,
+                        isLoading = isLoadingProjectNotes,
                         onBack = {
                             selectedProject = null
                             refreshData()
@@ -266,20 +337,6 @@ fun VoiceNotesApp() {
         }
     }
 
-    // Create Project Dialog
-    if (showCreateProject) {
-        CreateProjectDialog(
-            onDismiss = { showCreateProject = false },
-            onCreate = { name, purpose, goal ->
-                scope.launch {
-                    SupabaseClient.createProject(name, purpose, goal)
-                    showCreateProject = false
-                    refreshData()
-                }
-            }
-        )
-    }
-
     // Project Picker Dialog
     if (showProjectPicker != null) {
         ProjectPickerDialog(
@@ -287,9 +344,77 @@ fun VoiceNotesApp() {
             onDismiss = { showProjectPicker = null },
             onSelectProject = { project ->
                 scope.launch {
-                    SupabaseClient.assignNoteToProject(showProjectPicker!!.id, project.id)
-                    showProjectPicker = null
-                    refreshData()
+                    try {
+                        SupabaseClient.assignNoteToProject(showProjectPicker!!.id, project.id)
+                        showProjectPicker = null
+                        refreshData()
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        showProjectPicker = null
+                    }
+                }
+            },
+            onCreateProject = { projectName ->
+                // Create project inline with just the name
+                val noteToAssign = showProjectPicker
+                scope.launch {
+                    try {
+                        val success = SupabaseClient.createProject(projectName, null, null)
+                        if (success) {
+                            // Refresh projects list to get the newly created project
+                            projects = SupabaseClient.getProjects()
+
+                            // Assign the note to the new project
+                            if (noteToAssign != null) {
+                                val newProject = projects.firstOrNull { it.name == projectName }
+                                if (newProject != null) {
+                                    SupabaseClient.assignNoteToProject(noteToAssign.id, newProject.id)
+                                    showProjectPicker = null
+                                }
+                            }
+                            refreshData()
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
+        )
+    }
+
+    // Create Project Dialog (can be shown from Projects tab or from note assignment)
+    if (showCreateProject) {
+        val noteToAssign = showProjectPicker // Save reference before creating project
+        CreateProjectDialog(
+            onDismiss = {
+                showCreateProject = false
+                // Don't clear showProjectPicker here - user might want to pick again
+            },
+            onCreate = { name, purpose, goal ->
+                scope.launch {
+                    try {
+                        val success = SupabaseClient.createProject(name, purpose, goal)
+                        if (success) {
+                            // Refresh projects list to get the newly created project
+                            projects = SupabaseClient.getProjects()
+
+                            // If we were in the note assignment flow, assign the note to the new project
+                            if (noteToAssign != null) {
+                                // Find the newly created project (it should be first in the list)
+                                val newProject = projects.firstOrNull { it.name == name }
+                                if (newProject != null) {
+                                    SupabaseClient.assignNoteToProject(noteToAssign.id, newProject.id)
+                                    showProjectPicker = null // Clear the note assignment flow
+                                }
+                            }
+
+                            showCreateProject = false
+                            refreshData()
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        showCreateProject = false
+                    }
                 }
             }
         )
@@ -382,7 +507,9 @@ fun InboxScreen(
             Column(modifier = Modifier.padding(bottom = 32.dp)) {
                 OutlinedTextField(
                     value = currentTranscript,
-                    onValueChange = onTranscriptChange,
+                    onValueChange = {
+                        onTranscriptChange(it)
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(150.dp),
@@ -673,6 +800,7 @@ fun ProjectCard(
 fun ProjectDetailScreen(
     project: Project,
     notes: List<Note>,
+    isLoading: Boolean = false,
     onBack: () -> Unit,
     onArchive: () -> Unit,
     onDeleteNote: (String) -> Unit,
@@ -763,7 +891,14 @@ fun ProjectDetailScreen(
             )
         }
 
-        if (notes.isEmpty()) {
+        if (isLoading) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(color = Color.Black)
+            }
+        } else if (notes.isEmpty()) {
             Text(
                 text = "No notes yet. Record one or assign from inbox.",
                 fontSize = 16.sp,
@@ -801,7 +936,9 @@ fun CreateProjectDialog(
             Column {
                 OutlinedTextField(
                     value = name,
-                    onValueChange = { name = it },
+                    onValueChange = {
+                        name = it
+                    },
                     label = { Text("Name *") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
@@ -809,7 +946,9 @@ fun CreateProjectDialog(
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = purpose,
-                    onValueChange = { purpose = it },
+                    onValueChange = {
+                        purpose = it
+                    },
                     label = { Text("Purpose (optional)") },
                     maxLines = 3,
                     modifier = Modifier.fillMaxWidth()
@@ -817,7 +956,9 @@ fun CreateProjectDialog(
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = goal,
-                    onValueChange = { goal = it },
+                    onValueChange = {
+                        goal = it
+                    },
                     label = { Text("Goal (optional)") },
                     maxLines = 3,
                     modifier = Modifier.fillMaxWidth()
@@ -833,6 +974,7 @@ fun CreateProjectDialog(
                             purpose.ifBlank { null },
                             goal.ifBlank { null }
                         )
+                    } else {
                     }
                 },
                 enabled = name.isNotBlank(),
@@ -856,37 +998,129 @@ fun CreateProjectDialog(
 fun ProjectPickerDialog(
     projects: List<Project>,
     onDismiss: () -> Unit,
-    onSelectProject: (Project) -> Unit
+    onSelectProject: (Project) -> Unit,
+    onCreateProject: (String) -> Unit
 ) {
+    var newProjectName by remember { mutableStateOf("") }
+    var showCreateField by remember { mutableStateOf(false) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Assign to Project") },
         text = {
-            if (projects.isEmpty()) {
-                Text("No projects available. Create one first!")
-            } else {
-                LazyColumn {
-                    items(projects.filter { !it.is_archived }) { project ->
-                        Card(
-                            onClick = { onSelectProject(project) },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = Color.White
-                            ),
-                            border = BorderStroke(1.dp, Color.Black)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 400.dp)
+            ) {
+                // Inline project creation
+                if (showCreateField) {
+                    OutlinedTextField(
+                        value = newProjectName,
+                        onValueChange = { newProjectName = it },
+                        label = { Text("Project Name") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp)
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        TextButton(
+                            onClick = {
+                                if (newProjectName.isNotBlank()) {
+                                    onCreateProject(newProjectName)
+                                }
+                            },
+                            enabled = newProjectName.isNotBlank()
                         ) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Text(
-                                    text = project.name,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                if (!project.purpose.isNullOrBlank()) {
+                            Text("Create", color = if (newProjectName.isNotBlank()) Color.Black else Color.Gray)
+                        }
+                        TextButton(onClick = {
+                            showCreateField = false
+                            newProjectName = ""
+                        }) {
+                            Text("Cancel", color = Color.Black)
+                        }
+                    }
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                } else {
+                    TextButton(
+                        onClick = { showCreateField = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(
+                                Icons.Default.Add,
+                                contentDescription = "Create New",
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
+                            Text("Create New Project")
+                        }
+                    }
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                }
+
+                // Scrollable project list
+                LazyColumn(
+                    modifier = Modifier.weight(1f, fill = false)
+                ) {
+                    val activeProjects = projects.filter { !it.is_archived }
+                    if (activeProjects.isEmpty()) {
+                        item {
+                            Text(
+                                "No projects yet",
+                                color = Color.Gray,
+                                fontSize = 14.sp,
+                                modifier = Modifier.padding(16.dp)
+                            )
+                        }
+                    } else {
+                        items(activeProjects) { project ->
+                            Card(
+                                onClick = { onSelectProject(project) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = Color.White
+                                ),
+                                border = BorderStroke(1.dp, Color.Black)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = project.name,
+                                            fontWeight = FontWeight.Medium,
+                                            fontSize = 14.sp
+                                        )
+                                        if (!project.purpose.isNullOrBlank()) {
+                                            Text(
+                                                text = project.purpose,
+                                                fontSize = 11.sp,
+                                                color = Color.Gray,
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
                                     Text(
-                                        text = project.purpose,
+                                        text = "${project.note_count}",
                                         fontSize = 12.sp,
-                                        color = Color.Gray
+                                        color = Color.Gray,
+                                        modifier = Modifier.padding(start = 8.dp)
                                     )
                                 }
                             }
@@ -898,7 +1132,7 @@ fun ProjectPickerDialog(
         confirmButton = {},
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel", color = Color.Black)
+                Text("Close", color = Color.Black)
             }
         }
     )

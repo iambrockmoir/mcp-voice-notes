@@ -161,6 +161,71 @@ class VoiceNotesMCPServer:
                         "type": "object",
                         "properties": {}
                     }
+                },
+                {
+                    "name": "list_projects",
+                    "description": "List all projects with their note counts",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "include_archived": {
+                                "type": "boolean",
+                                "description": "Include archived projects",
+                                "default": False
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "get_project_notes",
+                    "description": "Get all notes for a specific project",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "project_id": {
+                                "type": "string",
+                                "description": "UUID of the project"
+                            }
+                        },
+                        "required": ["project_id"]
+                    }
+                },
+                {
+                    "name": "search_project_notes",
+                    "description": "Search notes within a specific project",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "project_id": {
+                                "type": "string",
+                                "description": "UUID of the project"
+                            },
+                            "query": {
+                                "type": "string",
+                                "description": "Search query string"
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum number of results",
+                                "default": 20
+                            }
+                        },
+                        "required": ["project_id", "query"]
+                    }
+                },
+                {
+                    "name": "search_all_projects",
+                    "description": "Search across all projects and their notes",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Search query string to find in project names, purposes, goals, or note content"
+                            }
+                        },
+                        "required": ["query"]
+                    }
                 }
             ]
         }
@@ -184,6 +249,18 @@ class VoiceNotesMCPServer:
                 result = await self.search_notes(arguments["query"], arguments.get("limit", 20))
             elif tool_name == "get_inbox_stats":
                 result = await self.get_inbox_stats()
+            elif tool_name == "list_projects":
+                result = await self.list_projects(arguments.get("include_archived", False))
+            elif tool_name == "get_project_notes":
+                result = await self.get_project_notes(arguments["project_id"])
+            elif tool_name == "search_project_notes":
+                result = await self.search_project_notes(
+                    arguments["project_id"],
+                    arguments["query"],
+                    arguments.get("limit", 20)
+                )
+            elif tool_name == "search_all_projects":
+                result = await self.search_all_projects(arguments["query"])
             else:
                 raise Exception(f"Unknown tool: {tool_name}")
             
@@ -253,7 +330,7 @@ class VoiceNotesMCPServer:
         """Get inbox statistics"""
         unprocessed = self.make_supabase_request("notes?select=id&user_id=eq.00000000-0000-0000-0000-000000000001&is_processed=eq.false&transcription_status=eq.completed")
         total = self.make_supabase_request("notes?select=id&user_id=eq.00000000-0000-0000-0000-000000000001")
-        
+
         if isinstance(unprocessed, list) and isinstance(total, list):
             return {
                 "unprocessed_count": len(unprocessed),
@@ -261,8 +338,90 @@ class VoiceNotesMCPServer:
                 "processed_count": len(total) - len(unprocessed),
                 "last_updated": datetime.utcnow().isoformat()
             }
-        
+
         return {"error": "Failed to get stats"}
+
+    async def list_projects(self, include_archived: bool = False) -> dict:
+        """List all projects"""
+        filter_param = "" if include_archived else "&is_archived=eq.false"
+        endpoint = f"projects?select=id,name,purpose,goal,is_archived,note_count,created_at,updated_at&user_id=eq.00000000-0000-0000-0000-000000000001{filter_param}&order=updated_at.desc"
+        result = self.make_supabase_request(endpoint)
+
+        if isinstance(result, list):
+            return {
+                "projects": result,
+                "count": len(result),
+                "include_archived": include_archived
+            }
+        return result
+
+    async def get_project_notes(self, project_id: str) -> dict:
+        """Get all notes for a specific project"""
+        # First get project details
+        project_endpoint = f"projects?id=eq.{project_id}&user_id=eq.00000000-0000-0000-0000-000000000001"
+        project_result = self.make_supabase_request(project_endpoint)
+
+        if not isinstance(project_result, list) or len(project_result) == 0:
+            return {"error": f"Project {project_id} not found"}
+
+        project = project_result[0]
+
+        # Get notes for this project
+        notes_endpoint = f"notes?select=id,transcript,created_at,word_count,audio_duration_seconds&project_id=eq.{project_id}&order=created_at.desc"
+        notes_result = self.make_supabase_request(notes_endpoint)
+
+        if isinstance(notes_result, list):
+            return {
+                "project": project,
+                "notes": notes_result,
+                "note_count": len(notes_result)
+            }
+
+        return notes_result
+
+    async def search_project_notes(self, project_id: str, query: str, limit: int = 20) -> dict:
+        """Search notes within a specific project"""
+        endpoint = f"notes?select=id,transcript,created_at,word_count&project_id=eq.{project_id}&transcript=ilike.%{query}%&order=created_at.desc&limit={limit}"
+        result = self.make_supabase_request(endpoint)
+
+        if isinstance(result, list):
+            return {
+                "project_id": project_id,
+                "notes": result,
+                "count": len(result),
+                "query": query
+            }
+        return result
+
+    async def search_all_projects(self, query: str) -> dict:
+        """Search across all projects and their notes"""
+        # Search in project names, purposes, and goals
+        projects_endpoint = f"projects?select=id,name,purpose,goal,note_count&user_id=eq.00000000-0000-0000-0000-000000000001&or=(name.ilike.%{query}%,purpose.ilike.%{query}%,goal.ilike.%{query}%)"
+        projects_result = self.make_supabase_request(projects_endpoint)
+
+        # Search in note content across all projects
+        notes_endpoint = f"notes?select=id,transcript,project_id,created_at&user_id=eq.00000000-0000-0000-0000-000000000001&project_id=not.is.null&transcript=ilike.%{query}%&limit=50"
+        notes_result = self.make_supabase_request(notes_endpoint)
+
+        matching_projects = projects_result if isinstance(projects_result, list) else []
+        matching_notes = notes_result if isinstance(notes_result, list) else []
+
+        # Group notes by project
+        notes_by_project = {}
+        for note in matching_notes:
+            pid = note.get("project_id")
+            if pid:
+                if pid not in notes_by_project:
+                    notes_by_project[pid] = []
+                notes_by_project[pid].append(note)
+
+        return {
+            "query": query,
+            "matching_projects": matching_projects,
+            "matching_projects_count": len(matching_projects),
+            "notes_by_project": notes_by_project,
+            "total_matching_notes": len(matching_notes)
+        }
 
 async def handle_message(server: VoiceNotesMCPServer, message: dict) -> dict:
     """Handle incoming MCP messages"""

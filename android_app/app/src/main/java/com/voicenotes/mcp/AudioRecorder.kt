@@ -8,6 +8,26 @@ import kotlinx.coroutines.flow.StateFlow
 import java.io.File
 import java.io.IOException
 
+/**
+ * AudioRecorder - Android audio recording wrapper
+ *
+ * Manages audio recording using Android's MediaRecorder API. Records audio
+ * in M4A format (MPEG-4 with AAC encoding) suitable for speech transcription.
+ *
+ * Features:
+ * - Records audio from device microphone
+ * - Saves to temporary cache directory
+ * - Exposes recording state via StateFlow for reactive UI
+ * - Handles Android version compatibility (API 31+)
+ *
+ * Usage:
+ *   val recorder = AudioRecorder(context)
+ *   recorder.startRecording()  // Begin recording
+ *   val file = recorder.stopRecording()  // Stop and get audio file
+ *   // Use file for transcription, then clean up
+ *
+ * @param context Android application context for accessing cache directory
+ */
 class AudioRecorder(private val context: Context) {
     private var mediaRecorder: MediaRecorder? = null
     private var audioFile: File? = null

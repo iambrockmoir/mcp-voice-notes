@@ -2,6 +2,8 @@ package com.voicenotes.mcp
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlinx.serialization.json.Json
@@ -9,6 +11,46 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
+/**
+ * SupabaseClient - Database operations for Voice Notes MCP
+ *
+ * Provides all database interactions with Supabase PostgreSQL backend.
+ * Implements CRUD operations for both notes and projects (v1.1).
+ *
+ * Architecture:
+ * - Uses Supabase REST API (not the Kotlin SDK)
+ * - All operations are async using Kotlin coroutines (Dispatchers.IO)
+ * - Returns domain models (Note, Project) deserialized from JSON
+ * - Uses anon key for client-side operations (RLS protected)
+ *
+ * API Sections:
+ * 1. Notes Operations (lines 23-127):
+ *    - getNotes() - Get all notes for user
+ *    - addNote() - Create new note with transcript
+ *    - updateNote() - Edit existing note
+ *    - deleteNote() - Remove note
+ *    - testConnection() - Verify Supabase connectivity
+ *
+ * 2. Projects Operations (lines 138-224):
+ *    - getProjects() - List projects with note counts
+ *    - createProject() - Create new project
+ *    - updateProject() - Edit project or archive
+ *    - getInboxNotes() - Notes without projects (inbox view)
+ *    - getProjectNotes() - Notes assigned to specific project
+ *    - assignNoteToProject() - Move note from inbox to project
+ *
+ * Configuration:
+ * - Requires SUPABASE_URL and SUPABASE_ANON_KEY in local.properties
+ * - Uses hardcoded user_id for demo purposes (multi-user in future)
+ *
+ * Error Handling:
+ * - Throws exceptions on HTTP errors
+ * - Returns false on operation failure
+ * - Errors include HTTP status and response body
+ *
+ * @see Note Data class for note structure
+ * @see Project Data class for project structure
+ */
 object SupabaseClient {
     private val SUPABASE_URL = BuildConfig.SUPABASE_URL
     private val SUPABASE_ANON_KEY = BuildConfig.SUPABASE_ANON_KEY
@@ -75,7 +117,6 @@ object SupabaseClient {
     }
     
     suspend fun updateNote(noteId: String, newTranscript: String): Boolean = withContext(Dispatchers.IO) {
-        println("SupabaseClient: Updating note $noteId")
         val url = URL("$SUPABASE_URL/rest/v1/notes?id=eq.$noteId")
         val connection = url.openConnection() as HttpURLConnection
         
@@ -97,18 +138,15 @@ object SupabaseClient {
         }
         
         val responseCode = connection.responseCode
-        println("SupabaseClient: Update response code: $responseCode")
         if (responseCode in 200..299) {
             true
         } else {
             val errorStream = connection.errorStream?.bufferedReader()?.readText() ?: "Unknown error"
-            println("SupabaseClient: Update failed - HTTP $responseCode: $errorStream")
             throw Exception("HTTP $responseCode: $errorStream")
         }
     }
     
     suspend fun deleteNote(noteId: String): Boolean = withContext(Dispatchers.IO) {
-        println("SupabaseClient: Deleting note $noteId")
         val url = URL("$SUPABASE_URL/rest/v1/notes?id=eq.$noteId")
         val connection = url.openConnection() as HttpURLConnection
         
@@ -120,12 +158,10 @@ object SupabaseClient {
         }
         
         val responseCode = connection.responseCode
-        println("SupabaseClient: Delete response code: $responseCode")
         if (responseCode in 200..299) {
             true
         } else {
             val errorStream = connection.errorStream?.bufferedReader()?.readText() ?: "Unknown error"
-            println("SupabaseClient: Delete failed - HTTP $responseCode: $errorStream")
             throw Exception("HTTP $responseCode: $errorStream")
         }
     }
@@ -143,7 +179,7 @@ object SupabaseClient {
 
     suspend fun getProjects(includeArchived: Boolean = false): List<Project> = withContext(Dispatchers.IO) {
         val filterParam = if (includeArchived) "" else "&is_archived=eq.false"
-        val url = URL("$SUPABASE_URL/rest/v1/projects?select=*&user_id=eq.00000000-0000-0000-0000-000000000001$filterParam&order=updated_at.desc")
+        val url = URL("$SUPABASE_URL/rest/v1/projects?select=id,user_id,name,purpose,goal,is_archived,created_at,updated_at,note_count&user_id=eq.00000000-0000-0000-0000-000000000001$filterParam&order=updated_at.desc")
         val connection = url.openConnection() as HttpURLConnection
 
         connection.apply {
@@ -157,22 +193,7 @@ object SupabaseClient {
         if (responseCode == HttpURLConnection.HTTP_OK) {
             val response = connection.inputStream.bufferedReader().readText()
             val projects = json.decodeFromString<List<Project>>(response)
-
-            // Get note counts for each project
-            projects.forEach { project ->
-                val notesUrl = URL("$SUPABASE_URL/rest/v1/notes?select=id&project_id=eq.${project.id}")
-                val notesConn = notesUrl.openConnection() as HttpURLConnection
-                notesConn.apply {
-                    requestMethod = "GET"
-                    setRequestProperty("apikey", SUPABASE_ANON_KEY)
-                    setRequestProperty("Authorization", "Bearer $SUPABASE_ANON_KEY")
-                }
-                if (notesConn.responseCode == HttpURLConnection.HTTP_OK) {
-                    val notesResponse = notesConn.inputStream.bufferedReader().readText()
-                    val notes = json.decodeFromString<List<Note>>(notesResponse)
-                    project.note_count = notes.size
-                }
-            }
+            // Note counts are now stored in the database and auto-updated by triggers
             projects
         } else {
             val errorStream = connection.errorStream?.bufferedReader()?.readText() ?: "Unknown error"
@@ -192,6 +213,7 @@ object SupabaseClient {
             put("user_id", "00000000-0000-0000-0000-000000000001")
         }
 
+
         connection.apply {
             requestMethod = "POST"
             setRequestProperty("apikey", SUPABASE_ANON_KEY)
@@ -206,6 +228,9 @@ object SupabaseClient {
         }
 
         val responseCode = connection.responseCode
+        if (responseCode !in 200..299) {
+            val errorStream = connection.errorStream?.bufferedReader()?.readText() ?: "Unknown error"
+        }
         responseCode in 200..299
     }
 
@@ -240,8 +265,9 @@ object SupabaseClient {
 
     suspend fun getInboxNotes(): List<Note> = withContext(Dispatchers.IO) {
         // Show ALL notes without a project, regardless of is_processed status
-        val url = URL("$SUPABASE_URL/rest/v1/notes?select=*&user_id=eq.00000000-0000-0000-0000-000000000001&is.project_id=null&order=created_at.desc")
+        val url = URL("$SUPABASE_URL/rest/v1/notes?select=*&user_id=eq.00000000-0000-0000-0000-000000000001&project_id=is.null&order=created_at.desc")
         val connection = url.openConnection() as HttpURLConnection
+
 
         connection.apply {
             requestMethod = "GET"
@@ -251,9 +277,11 @@ object SupabaseClient {
         }
 
         val responseCode = connection.responseCode
+
         if (responseCode == HttpURLConnection.HTTP_OK) {
             val response = connection.inputStream.bufferedReader().readText()
-            json.decodeFromString<List<Note>>(response)
+            val notes = json.decodeFromString<List<Note>>(response)
+            notes
         } else {
             val errorStream = connection.errorStream?.bufferedReader()?.readText() ?: "Unknown error"
             throw Exception("HTTP $responseCode: $errorStream")
