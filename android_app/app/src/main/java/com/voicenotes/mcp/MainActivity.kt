@@ -137,7 +137,7 @@ fun VoiceNotesApp() {
                     contentColor = Color.Black
                 ) {
                     NavigationBarItem(
-                        icon = { Icon(Icons.Default.Home, contentDescription = "Home") },
+                        icon = { Icon(Icons.Default.Email, contentDescription = "Inbox") },
                         label = { Text("Inbox") },
                         selected = currentScreen == Screen.INBOX,
                         onClick = { currentScreen = Screen.INBOX }

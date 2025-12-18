@@ -239,7 +239,8 @@ object SupabaseClient {
     }
 
     suspend fun getInboxNotes(): List<Note> = withContext(Dispatchers.IO) {
-        val url = URL("$SUPABASE_URL/rest/v1/notes?select=*&user_id=eq.00000000-0000-0000-0000-000000000001&is.project_id=null&is_processed=eq.false&order=created_at.desc")
+        // Show ALL notes without a project, regardless of is_processed status
+        val url = URL("$SUPABASE_URL/rest/v1/notes?select=*&user_id=eq.00000000-0000-0000-0000-000000000001&is.project_id=null&order=created_at.desc")
         val connection = url.openConnection() as HttpURLConnection
 
         connection.apply {
