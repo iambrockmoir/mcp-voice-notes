@@ -72,4 +72,6 @@ logs/
 
 # Temporary files
 *.tmp
-*.temp
+*.tempbackups/
+*.tar.gz
+*.apk
