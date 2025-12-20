@@ -229,6 +229,36 @@ fun VoiceNotesApp() {
                         project = selectedProject!!,
                         notes = projectNotes,
                         isLoading = isLoadingProjectNotes,
+                        isRecording = isRecording,
+                        isTranscribing = isTranscribing,
+                        hasPermission = hasPermission,
+                        onStartRecording = {
+                            if (audioRecorder.startRecording()) {
+                                isRecording = true
+                            }
+                        },
+                        onStopRecording = {
+                            val audioFile = audioRecorder.stopRecording()
+                            isRecording = false
+                            if (audioFile != null) {
+                                scope.launch {
+                                    isTranscribing = true
+                                    try {
+                                        val transcript = OpenAIClient.transcribeAudio(audioFile)
+                                        SupabaseClient.addNote(transcript, 0, selectedProject!!.id)
+                                        refreshData()
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
+                                    } finally {
+                                        isTranscribing = false
+                                        audioFile.delete()
+                                    }
+                                }
+                            }
+                        },
+                        onRequestPermission = {
+                            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        },
                         onBack = {
                             selectedProject = null
                             refreshData()
@@ -801,6 +831,12 @@ fun ProjectDetailScreen(
     project: Project,
     notes: List<Note>,
     isLoading: Boolean = false,
+    isRecording: Boolean = false,
+    isTranscribing: Boolean = false,
+    hasPermission: Boolean = true,
+    onStartRecording: () -> Unit = {},
+    onStopRecording: () -> Unit = {},
+    onRequestPermission: () -> Unit = {},
     onBack: () -> Unit,
     onArchive: () -> Unit,
     onDeleteNote: (String) -> Unit,
@@ -808,11 +844,12 @@ fun ProjectDetailScreen(
 ) {
     var showMenu by remember { mutableStateOf(false) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(20.dp)
-    ) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(20.dp)
+        ) {
         // Header with back button
         Row(
             modifier = Modifier
@@ -915,6 +952,38 @@ fun ProjectDetailScreen(
                         showAssignOption = false
                     )
                 }
+            }
+        }
+        }
+
+        // Recording FAB in bottom-right corner
+        FloatingActionButton(
+            onClick = {
+                when {
+                    !hasPermission -> onRequestPermission()
+                    isRecording -> onStopRecording()
+                    !isTranscribing -> onStartRecording()
+                }
+            },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(16.dp)
+                .size(56.dp),
+            shape = CircleShape,
+            containerColor = if (isRecording) Color.Red else Color.Black
+        ) {
+            if (isTranscribing) {
+                CircularProgressIndicator(
+                    color = Color.White,
+                    modifier = Modifier.size(24.dp),
+                    strokeWidth = 2.dp
+                )
+            } else {
+                Text(
+                    text = if (isRecording) "■" else "●",
+                    fontSize = 20.sp,
+                    color = Color.White
+                )
             }
         }
     }

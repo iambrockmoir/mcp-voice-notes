@@ -82,16 +82,19 @@ object SupabaseClient {
         }
     }
     
-    suspend fun addNote(transcript: String, durationSeconds: Int = 0): Boolean = withContext(Dispatchers.IO) {
-        // Try a simple approach - insert without user_id and let database handle it
+    suspend fun addNote(transcript: String, durationSeconds: Int = 0, projectId: String? = null): Boolean = withContext(Dispatchers.IO) {
         val url = URL("$SUPABASE_URL/rest/v1/notes")
         val connection = url.openConnection() as HttpURLConnection
-        
+
         val noteData = buildJsonObject {
             put("transcript", transcript)
             put("transcription_status", "completed")
             put("audio_duration_seconds", durationSeconds)
-            put("user_id", "00000000-0000-0000-0000-000000000001") // Required field
+            put("user_id", "00000000-0000-0000-0000-000000000001")
+            if (projectId != null) {
+                put("project_id", projectId)
+                put("is_processed", true)
+            }
         }
         
         connection.apply {
